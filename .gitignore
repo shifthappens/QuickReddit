@@ -1,0 +1,4 @@
+.env
+reddit_report.html
+__pycache__/
+*.pyc
