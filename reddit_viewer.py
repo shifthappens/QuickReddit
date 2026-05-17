@@ -185,17 +185,18 @@ def fetch_more_comments(post_id: str, more_ids: list[str]) -> list[dict]:
         return []
 
 
-def fetch_comments(post_id: str, subreddit: str) -> list[dict]:
+def fetch_comments(post_id: str, subreddit: str, num_comments: int = 0) -> list[dict]:
+    target = max(TARGET_COMMENTS, int(num_comments * 0.15))
     url = (
         f"https://www.reddit.com/r/{subreddit}/comments/{post_id}.json"
-        f"?limit={TOP_LEVEL_LIMIT}&sort=top&depth=3"
+        f"?limit={max(TOP_LEVEL_LIMIT, target)}&sort=top&depth=2"
     )
     data = api_get(url)
     if len(data) < 2:
         return []
     comments, more_ids = _parse_comment_children(data[1]["data"]["children"], level=1)
 
-    if len(comments) < TARGET_COMMENTS and more_ids:
+    if len(comments) < target and more_ids:
         extra = fetch_more_comments(post_id, more_ids)
         comments.extend(extra)
 
@@ -222,7 +223,7 @@ def main():
         print("Samenvattingen: uitgeschakeld", flush=True)
 
     result = {
-        "fetched_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "llm_model": LLM_MODEL if summarize else None,
         "subreddits": {}
     }
@@ -245,9 +246,10 @@ def main():
             try:
                 print(f"    comments ophalen...", end=" ", flush=True)
                 t0 = time.time()
-                post["comments"] = fetch_comments(post["id"], sub)
+                post["comments"] = fetch_comments(post["id"], sub, post["num_comments"])
                 n = len(post['comments'])
-                print(f"{n} comments ({time.time()-t0:.1f}s)", flush=True)
+                target = max(TARGET_COMMENTS, int(post["num_comments"] * 0.15))
+                print(f"{n}/{target} comments ({time.time()-t0:.1f}s)", flush=True)
                 time.sleep(0.5)
             except urllib.error.HTTPError as e:
                 print(f"mislukt (HTTP {e.code})", flush=True)

@@ -116,16 +116,13 @@
 
       const commentCount = (post.comments || []).length;
       const summary = post.summary
-        ? `<div class="summary">
-             <div class="summary-label">Samenvatting op basis van ${commentCount} comments</div>
-             <p>${esc(post.summary).replace(/\n/g, '<br>')}</p>
-           </div>`
+        ? `<div class="summary"><p>${esc(post.summary).replace(/\n/g, '<br>')}</p></div>`
         : '';
 
       return `
         <article>
           <h3><a href="${esc(post.url)}" target="_blank">${esc(unesc(post.title))}</a></h3>
-          <div class="meta">u/${esc(post.author)} &middot; ${post.score} pts &middot; ${post.num_comments} comments &middot; ${date}</div>
+          <div class="meta">u/${esc(post.author)} &middot; ${post.score} pts &middot; ${post.num_comments} comments &middot; ${date}${post.summary ? ` &middot; samenvatting op basis van ${commentCount} comments` : ''}</div>
           ${summary}
         </article>`;
     }
