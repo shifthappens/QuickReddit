@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-QuickReddit - daily Reddit subreddit viewer.
-Uses Reddit's public JSON API — no credentials needed.
+QuickReddit - fetches top Reddit posts + nested comments, generates Claude summaries.
+Requires: pip install anthropic
+Requires: ANTHROPIC_API_KEY env var for summaries (skipped if absent)
 """
 
 import json
-import html
 import datetime
 import argparse
 import time
@@ -15,9 +15,10 @@ import os
 import sys
 
 SUBREDDITS = ["dutchfire", "freelance", "webdev"]
-POSTS_PER_SUB = 25
-TOP_COMMENTS = 5
-# Reddit requires a descriptive User-Agent for API requests
+POSTS_PER_SUB = 10
+TOP_LEVEL_LIMIT = 50
+SUMMARY_MODEL = "claude-haiku-4-5-20251001"
+
 USER_AGENT = "python:QuickReddit:v1.0 (personal daily digest; single user)"
 
 
@@ -27,8 +28,11 @@ def api_get(url: str) -> dict:
         return json.loads(resp.read())
 
 
-def fetch_posts(subreddit: str, limit: int) -> list[dict]:
-    url = f"https://www.reddit.com/r/{subreddit}/new.json?limit={limit}"
+def fetch_posts(subreddit: str, limit: int, sort: str = "top", timeframe: str = "day") -> list[dict]:
+    if sort == "top":
+        url = f"https://www.reddit.com/r/{subreddit}/top.json?t={timeframe}&limit={limit}"
+    else:
+        url = f"https://www.reddit.com/r/{subreddit}/{sort}.json?limit={limit}"
     data = api_get(url)
     posts = []
     for child in data["data"]["children"]:
@@ -39,7 +43,7 @@ def fetch_posts(subreddit: str, limit: int) -> list[dict]:
             "author": p.get("author", "[deleted]"),
             "score": p["score"],
             "url": f"https://www.reddit.com{p['permalink']}",
-            "selftext": p.get("selftext", "")[:300],
+            "selftext": p.get("selftext", "")[:500],
             "num_comments": p["num_comments"],
             "created_utc": p["created_utc"],
             "subreddit": subreddit,
@@ -47,173 +51,155 @@ def fetch_posts(subreddit: str, limit: int) -> list[dict]:
     return posts
 
 
-def fetch_top_comments(post_id: str, subreddit: str) -> list[dict]:
-    url = f"https://www.reddit.com/r/{subreddit}/comments/{post_id}.json?limit=10&sort=top&depth=1"
-    data = api_get(url)
-    comments = []
-    if len(data) < 2:
-        return comments
-    for child in data[1]["data"]["children"]:
-        c = child["data"]
-        if c.get("kind") == "more" or not c.get("body"):
+def fetch_top_posts_24h(subreddit: str, limit: int) -> tuple[list[dict], str]:
+    posts = fetch_posts(subreddit, limit, sort="top", timeframe="day")
+    if posts:
+        return posts, "top/dag"
+    posts = fetch_posts(subreddit, limit, sort="hot")
+    return posts, "hot"
+
+
+def _parse_comment_children(children: list, level: int, per_level_limit: int) -> list[dict]:
+    results = []
+    for child in children:
+        if len(results) >= per_level_limit:
+            break
+        if child.get("kind") == "more" or not child.get("data", {}).get("body"):
             continue
-        comments.append({
+        c = child["data"]
+        comment = {
             "author": c.get("author", "[deleted]"),
             "score": c.get("score", 0),
-            "body": c.get("body", "")[:500],
-        })
-        if len(comments) >= TOP_COMMENTS:
-            break
-    return comments
+            "body": c.get("body", "")[:600],
+            "level": level,
+            "replies": [],
+        }
+        if level < 3:
+            raw_replies = c.get("replies", "")
+            if isinstance(raw_replies, dict):
+                reply_children = raw_replies["data"]["children"]
+                comment["replies"] = _parse_comment_children(reply_children, level + 1, per_level_limit)
+        results.append(comment)
+    return results
 
 
-def render_html(subreddit_data: dict, posts_per_sub: int) -> str:
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    rows = []
-    for subreddit, posts in subreddit_data.items():
-        rows.append(f'<section><h2>r/{html.escape(subreddit)}</h2>')
-        if not posts:
-            rows.append('<p class="empty">Geen posts gevonden.</p>')
-        for post in posts:
-            created = datetime.datetime.utcfromtimestamp(post["created_utc"]).strftime("%Y-%m-%d %H:%M UTC")
+def fetch_comments(post_id: str, subreddit: str) -> list[dict]:
+    url = (
+        f"https://www.reddit.com/r/{subreddit}/comments/{post_id}.json"
+        f"?limit={TOP_LEVEL_LIMIT}&sort=top&depth=3"
+    )
+    data = api_get(url)
+    if len(data) < 2:
+        return []
+    return _parse_comment_children(data[1]["data"]["children"], level=1, per_level_limit=TOP_LEVEL_LIMIT)
 
-            comments_html = ""
-            for c in post.get("comments", []):
-                body = html.escape(c["body"]).replace("\n", "<br>")
-                comments_html += (
-                    f'<div class="comment">'
-                    f'<span class="cmeta">u/{html.escape(c["author"])} · {c["score"]} pts</span>'
-                    f'<p>{body}</p>'
-                    f'</div>'
-                )
-            if not comments_html:
-                comments_html = '<p class="empty">Geen comments geladen.</p>'
 
-            selftext = ""
-            if post["selftext"].strip():
-                excerpt = html.escape(post["selftext"])
-                ellipsis = "…" if len(post["selftext"]) == 300 else ""
-                selftext = f'<p class="selftext">{excerpt}{ellipsis}</p>'
+def flatten_comments(comments: list[dict], max_chars: int = 8000) -> str:
+    lines = []
+    total = 0
 
-            rows.append(f"""
-<article>
-  <h3><a href="{html.escape(post['url'])}" target="_blank">{html.escape(post['title'])}</a></h3>
-  <div class="meta">
-    u/{html.escape(post['author'])} · {post['score']} pts · {post['num_comments']} comments · {created}
-  </div>
-  {selftext}
-  <details>
-    <summary>Top comments</summary>
-    <div class="comments">{comments_html}</div>
-  </details>
-</article>""")
-        rows.append('</section>')
+    def walk(comments, indent=0):
+        nonlocal total
+        for c in comments:
+            if total >= max_chars:
+                return
+            prefix = "  " * indent
+            line = f"{prefix}[{c['score']} pts] u/{c['author']}: {c['body']}"
+            lines.append(line)
+            total += len(line)
+            if c.get("replies"):
+                walk(c["replies"], indent + 1)
 
-    body = "\n".join(rows)
-    return f"""<!DOCTYPE html>
-<html lang="nl">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>QuickReddit – {now}</title>
-  <style>
-    *, *::before, *::after {{ box-sizing: border-box; }}
-    body {{
-      font-family: system-ui, sans-serif;
-      max-width: 860px;
-      margin: 0 auto;
-      padding: 1.5rem 1rem;
-      background: #f6f7f8;
-      color: #1c1c1c;
-    }}
-    h1 {{ font-size: 1.4rem; margin-bottom: 0.25rem; }}
-    h2 {{
-      font-size: 1.1rem;
-      background: #ff4500;
-      color: #fff;
-      padding: 0.4rem 0.75rem;
-      border-radius: 4px;
-      margin: 2rem 0 0.75rem;
-    }}
-    article {{
-      background: #fff;
-      border: 1px solid #e0e0e0;
-      border-radius: 6px;
-      padding: 1rem;
-      margin-bottom: 0.75rem;
-    }}
-    h3 {{ margin: 0 0 0.35rem; font-size: 1rem; }}
-    h3 a {{ color: #0079d3; text-decoration: none; }}
-    h3 a:hover {{ text-decoration: underline; }}
-    .meta {{ font-size: 0.8rem; color: #666; margin-bottom: 0.5rem; }}
-    .selftext {{
-      font-size: 0.88rem; color: #333; margin: 0.5rem 0;
-      border-left: 3px solid #e0e0e0; padding-left: 0.75rem;
-    }}
-    details {{ margin-top: 0.5rem; }}
-    summary {{ cursor: pointer; font-size: 0.85rem; color: #555; user-select: none; }}
-    .comments {{ margin-top: 0.5rem; }}
-    .comment {{
-      border-left: 3px solid #ff4500;
-      padding: 0.4rem 0.6rem;
-      margin-bottom: 0.5rem;
-      background: #fafafa;
-      border-radius: 0 4px 4px 0;
-    }}
-    .cmeta {{ font-size: 0.75rem; color: #888; display: block; margin-bottom: 0.2rem; }}
-    .comment p {{ margin: 0; font-size: 0.85rem; line-height: 1.4; }}
-    .empty {{ color: #999; font-size: 0.85rem; }}
-    footer {{ margin-top: 2rem; font-size: 0.75rem; color: #aaa; text-align: center; }}
-  </style>
-</head>
-<body>
-  <h1>QuickReddit</h1>
-  <p style="font-size:0.85rem;color:#666">Gegenereerd op {now} · {posts_per_sub} nieuwste posts per subreddit</p>
-  {body}
-  <footer>QuickReddit – alleen voor persoonlijk gebruik</footer>
-</body>
-</html>"""
+    walk(comments)
+    return "\n".join(lines)
+
+
+def summarize(client, post: dict) -> str:
+    comments_text = flatten_comments(post.get("comments", []))
+    if not comments_text:
+        return ""
+
+    context = f"Post: {post['title']}"
+    if post.get("selftext", "").strip():
+        context += f"\n{post['selftext']}"
+
+    msg = client.messages.create(
+        model=SUMMARY_MODEL,
+        max_tokens=400,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"{context}\n\n"
+                f"Discussie:\n{comments_text}\n\n"
+                "Schrijf een scherpe samenvatting (4-6 zinnen) in het Nederlands. "
+                "Belicht alle kanten: de consensus, de tegengeluiden, de scherpe of onverwachte standpunten, "
+                "en wat er eventueel niet gezegd wordt. Good, bad, ugly — niets weglaten."
+            )
+        }]
+    )
+    return msg.content[0].text
 
 
 def main():
-    parser = argparse.ArgumentParser(description="QuickReddit – dagelijks Reddit overzicht")
-    parser.add_argument("--subreddits", nargs="+", default=SUBREDDITS,
-                        help="Subreddits (default: dutchfire freelance webdev)")
-    parser.add_argument("--posts", type=int, default=POSTS_PER_SUB,
-                        help="Posts per subreddit (default: 25)")
-    parser.add_argument("--output", default="reddit_report.html",
-                        help="Output HTML bestand (default: reddit_report.html)")
-    parser.add_argument("--no-comments", action="store_true",
-                        help="Sla comments over (sneller)")
+    parser = argparse.ArgumentParser(description="QuickReddit")
+    parser.add_argument("--subreddits", nargs="+", default=SUBREDDITS)
+    parser.add_argument("--posts", type=int, default=POSTS_PER_SUB)
+    parser.add_argument("--output", default="reddit_data.json")
+    parser.add_argument("--no-summarize", action="store_true", help="Skip AI summaries")
     args = parser.parse_args()
 
-    subreddit_data = {}
+    claude = None
+    if not args.no_summarize:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if api_key:
+            try:
+                import anthropic
+                claude = anthropic.Anthropic(api_key=api_key)
+                print("Claude API beschikbaar, samenvattingen worden gegenereerd.")
+            except ImportError:
+                print("Waarschuwing: anthropic niet geinstalleerd, samenvattingen overgeslagen.", file=sys.stderr)
+        else:
+            print("Geen ANTHROPIC_API_KEY gevonden, samenvattingen overgeslagen.")
+
+    result = {
+        "fetched_at": datetime.datetime.utcnow().isoformat(),
+        "subreddits": {}
+    }
+
     for sub in args.subreddits:
-        print(f"  r/{sub} ophalen...", flush=True)
+        print(f"\nr/{sub} ophalen...", flush=True)
         try:
-            posts = fetch_posts(sub, args.posts)
+            posts, sort_used = fetch_top_posts_24h(sub, args.posts)
+            if sort_used != "top/dag":
+                print(f"  (fallback naar {sort_used})", flush=True)
         except urllib.error.HTTPError as e:
-            print(f"  Waarschuwing: r/{sub} overgeslagen (HTTP {e.code})", file=sys.stderr)
-            subreddit_data[sub] = []
+            print(f"  Overgeslagen (HTTP {e.code})", file=sys.stderr)
+            result["subreddits"][sub] = []
             continue
 
-        if not args.no_comments:
-            for post in posts:
-                try:
-                    post["comments"] = fetch_top_comments(post["id"], sub)
-                    time.sleep(0.5)  # vriendelijk voor Reddit's servers
-                except urllib.error.HTTPError:
-                    post["comments"] = []
+        for i, post in enumerate(posts, 1):
+            print(f"  [{i}/{len(posts)}] {post['title'][:55]}…", flush=True)
+            try:
+                post["comments"] = fetch_comments(post["id"], sub)
+                time.sleep(0.5)
+            except urllib.error.HTTPError:
+                post["comments"] = []
 
-        subreddit_data[sub] = posts
+            post["summary"] = ""
+            if claude:
+                try:
+                    post["summary"] = summarize(claude, post)
+                except Exception as e:
+                    print(f"    Samenvatting mislukt: {e}", file=sys.stderr)
+
+        result["subreddits"][sub] = posts
 
     output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.output)
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(render_html(subreddit_data, args.posts))
+        json.dump(result, f, ensure_ascii=False, indent=2)
 
-    total = sum(len(v) for v in subreddit_data.values())
+    total = sum(len(v) for v in result["subreddits"].values())
     print(f"\nKlaar! {total} posts → {output_path}")
-    print(f"Open in browser: file://{output_path}")
 
 
 if __name__ == "__main__":

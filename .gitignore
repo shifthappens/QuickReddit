@@ -1,4 +1,4 @@
 .env
-reddit_report.html
+reddit_data.json
 __pycache__/
 *.pyc
