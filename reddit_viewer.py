@@ -47,6 +47,7 @@ def llm_summarize(post: dict) -> str:
         "model": LLM_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 2000,
+        "include_reasoning": False,
     }).encode()
 
     req = urllib.request.Request(
