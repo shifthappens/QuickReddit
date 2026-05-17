@@ -98,49 +98,22 @@
         .replace(/"/g, '&quot;');
     }
 
-    function renderComments(comments) {
-      if (!comments || comments.length === 0) return '';
-      return comments.map(c => `
-        <div class="comment level-${c.level}">
-          <span class="cmeta">u/${esc(c.author)} &middot; ${c.score} pts</span>
-          <p>${esc(c.body).replace(/\n/g, '<br>')}</p>
-          ${renderComments(c.replies)}
-        </div>
-      `).join('');
-    }
-
     function renderPost(post) {
       const date = new Date(post.created_utc * 1000).toLocaleString('nl-NL', {
         day: '2-digit', month: '2-digit', year: 'numeric',
         hour: '2-digit', minute: '2-digit'
       });
 
-      const selftext = post.selftext?.trim()
-        ? `<p class="selftext">${esc(post.selftext)}${post.selftext.length >= 500 ? '…' : ''}</p>`
-        : '';
-
       const summary = post.summary
-        ? `<div class="summary"><div class="summary-label">Claude samenvatting</div><p>${esc(post.summary).replace(/\n/g, '<br>')}</p></div>`
+        ? `<div class="summary"><p>${esc(post.summary).replace(/\n/g, '<br>')}</p></div>`
         : '';
-
-      const commentCount = countComments(post.comments);
-      const commentsHtml = commentCount > 0
-        ? `<details><summary>${commentCount} comments geladen</summary><div class="comments">${renderComments(post.comments)}</div></details>`
-        : `<p class="empty">Geen comments.</p>`;
 
       return `
         <article>
           <h3><a href="${esc(post.url)}" target="_blank">${esc(post.title)}</a></h3>
           <div class="meta">u/${esc(post.author)} &middot; ${post.score} pts &middot; ${post.num_comments} comments &middot; ${date}</div>
-          ${selftext}
           ${summary}
-          ${commentsHtml}
         </article>`;
-    }
-
-    function countComments(comments) {
-      if (!comments) return 0;
-      return comments.reduce((n, c) => n + 1 + countComments(c.replies), 0);
     }
 
     async function init() {
