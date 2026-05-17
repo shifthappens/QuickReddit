@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-QuickReddit - fetches top Reddit posts + nested comments, generates Claude summaries.
-Requires: pip install anthropic
-Requires: ANTHROPIC_API_KEY env var for summaries (skipped if absent)
+QuickReddit - fetches top Reddit posts + nested comments and saves to JSON.
+Summaries are generated separately by Claude Code.
 """
 
 import json
@@ -11,13 +10,10 @@ import argparse
 import time
 import urllib.request
 import urllib.error
-import os
-import sys
 
 SUBREDDITS = ["dutchfire", "freelance", "webdev"]
 POSTS_PER_SUB = 10
 TOP_LEVEL_LIMIT = 50
-SUMMARY_MODEL = "claude-haiku-4-5-20251001"
 
 USER_AGENT = "python:QuickReddit:v1.0 (personal daily digest; single user)"
 
@@ -47,6 +43,7 @@ def fetch_posts(subreddit: str, limit: int, sort: str = "top", timeframe: str = 
             "num_comments": p["num_comments"],
             "created_utc": p["created_utc"],
             "subreddit": subreddit,
+            "summary": "",
         })
     return posts
 
@@ -94,72 +91,12 @@ def fetch_comments(post_id: str, subreddit: str) -> list[dict]:
     return _parse_comment_children(data[1]["data"]["children"], level=1, per_level_limit=TOP_LEVEL_LIMIT)
 
 
-def flatten_comments(comments: list[dict], max_chars: int = 8000) -> str:
-    lines = []
-    total = 0
-
-    def walk(comments, indent=0):
-        nonlocal total
-        for c in comments:
-            if total >= max_chars:
-                return
-            prefix = "  " * indent
-            line = f"{prefix}[{c['score']} pts] u/{c['author']}: {c['body']}"
-            lines.append(line)
-            total += len(line)
-            if c.get("replies"):
-                walk(c["replies"], indent + 1)
-
-    walk(comments)
-    return "\n".join(lines)
-
-
-def summarize(client, post: dict) -> str:
-    comments_text = flatten_comments(post.get("comments", []))
-    if not comments_text:
-        return ""
-
-    context = f"Post: {post['title']}"
-    if post.get("selftext", "").strip():
-        context += f"\n{post['selftext']}"
-
-    msg = client.messages.create(
-        model=SUMMARY_MODEL,
-        max_tokens=400,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"{context}\n\n"
-                f"Discussie:\n{comments_text}\n\n"
-                "Schrijf een scherpe samenvatting (4-6 zinnen) in het Nederlands. "
-                "Belicht alle kanten: de consensus, de tegengeluiden, de scherpe of onverwachte standpunten, "
-                "en wat er eventueel niet gezegd wordt. Good, bad, ugly — niets weglaten."
-            )
-        }]
-    )
-    return msg.content[0].text
-
-
 def main():
-    parser = argparse.ArgumentParser(description="QuickReddit")
+    parser = argparse.ArgumentParser(description="QuickReddit — fetch only")
     parser.add_argument("--subreddits", nargs="+", default=SUBREDDITS)
     parser.add_argument("--posts", type=int, default=POSTS_PER_SUB)
     parser.add_argument("--output", default="reddit_data.json")
-    parser.add_argument("--no-summarize", action="store_true", help="Skip AI summaries")
     args = parser.parse_args()
-
-    claude = None
-    if not args.no_summarize:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if api_key:
-            try:
-                import anthropic
-                claude = anthropic.Anthropic(api_key=api_key)
-                print("Claude API beschikbaar, samenvattingen worden gegenereerd.")
-            except ImportError:
-                print("Waarschuwing: anthropic niet geinstalleerd, samenvattingen overgeslagen.", file=sys.stderr)
-        else:
-            print("Geen ANTHROPIC_API_KEY gevonden, samenvattingen overgeslagen.")
 
     result = {
         "fetched_at": datetime.datetime.utcnow().isoformat(),
@@ -173,7 +110,7 @@ def main():
             if sort_used != "top/dag":
                 print(f"  (fallback naar {sort_used})", flush=True)
         except urllib.error.HTTPError as e:
-            print(f"  Overgeslagen (HTTP {e.code})", file=sys.stderr)
+            print(f"  Overgeslagen (HTTP {e.code})")
             result["subreddits"][sub] = []
             continue
 
@@ -185,21 +122,16 @@ def main():
             except urllib.error.HTTPError:
                 post["comments"] = []
 
-            post["summary"] = ""
-            if claude:
-                try:
-                    post["summary"] = summarize(claude, post)
-                except Exception as e:
-                    print(f"    Samenvatting mislukt: {e}", file=sys.stderr)
-
         result["subreddits"][sub] = posts
 
+    import os
     output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.output)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
     total = sum(len(v) for v in result["subreddits"].values())
     print(f"\nKlaar! {total} posts → {output_path}")
+    print("Vraag Claude Code nu om samenvattingen te genereren.")
 
 
 if __name__ == "__main__":

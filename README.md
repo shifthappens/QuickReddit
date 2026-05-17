@@ -1,15 +1,20 @@
 # QuickReddit
 
-Dagelijks Reddit-overzicht: nieuwe posts + top comments als HTML-rapport.  
-**Geen API-key of registratie nodig** — werkt direct.
+Dagelijks Reddit-digest: posts ophalen met Python, samenvattingen genereren via Claude Code, resultaat bekijken als HTML.
 
-## Gebruik
+## Workflow
 
 ```bash
+# 1. Data ophalen
 python3 reddit_viewer.py
-```
 
-Genereert `reddit_report.html` in de huidige map. Open in je browser.
+# 2. Vraag Claude Code om samenvattingen te genereren
+# "lees reddit_data.json, schrijf een Nederlandse samenvatting per post en sla op"
+
+# 3. Open in browser (vereist een lokale server vanwege fetch())
+python3 -m http.server 8765
+# → http://localhost:8765/reddit_report.html
+```
 
 ## Opties
 
@@ -17,26 +22,19 @@ Genereert `reddit_report.html` in de huidige map. Open in je browser.
 python3 reddit_viewer.py [opties]
 
   --subreddits r/a r/b ...   Subreddits (default: dutchfire freelance webdev)
-  --posts N                  Posts per subreddit (default: 25)
-  --output bestand.html      Uitvoerbestand (default: reddit_report.html)
-  --no-comments              Sla comments over (veel sneller)
+  --posts N                  Posts per subreddit (default: 10)
+  --output bestand.json      Uitvoerbestand (default: reddit_data.json)
 ```
 
-### Voorbeelden
+## Hoe het werkt
 
-```bash
-# Standaard: dutchfire + freelance + webdev, 25 posts, top 5 comments
-python3 reddit_viewer.py
+1. `reddit_viewer.py` haalt posts + comments op via Reddit's publieke JSON API en slaat op als `reddit_data.json`.
+2. Claude Code leest de JSON en schrijft per post een gebalanceerde samenvatting terug naar `summary`-veld.
+3. `reddit_report.html` laadt de JSON en toont titel, meta en samenvatting per post.
 
-# Alleen dutchfire, 10 posts
-python3 reddit_viewer.py --subreddits dutchfire --posts 10
+## Automatisering via Claude Cowork
 
-# Extra subreddits
-python3 reddit_viewer.py --subreddits dutchfire freelance webdev python Netherlands
-
-# Snelle run zonder comments
-python3 reddit_viewer.py --no-comments
-```
+Periodieke taak: draai `python3 reddit_viewer.py`, lees daarna `reddit_data.json`, genereer voor elke post een Nederlandse samenvatting en schrijf die terug naar de `summary`-velden.
 
 ## Vereisten
 
