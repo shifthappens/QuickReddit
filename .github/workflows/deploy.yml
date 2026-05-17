@@ -14,4 +14,4 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
-          script: /var/www/quickreddit/deploy.sh
+          script: cd /var/www/html/domains/coen.at/public_html/quickreddit && git pull origin main
