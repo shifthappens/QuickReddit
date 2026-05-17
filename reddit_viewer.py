@@ -223,6 +223,7 @@ def main():
 
     result = {
         "fetched_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "llm_model": LLM_MODEL if summarize else None,
         "subreddits": {}
     }
 
