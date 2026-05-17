@@ -11,7 +11,7 @@ import time
 import urllib.request
 import urllib.error
 
-SUBREDDITS = ["dutchfire", "freelance", "webdev"]
+SUBREDDITS = ["dutchfire", "werkzaken", "askreddit", "komoot", "todayilearned", "youshouldknow", "zuinig"]
 POSTS_PER_SUB = 10
 TOP_LEVEL_LIMIT = 50
 

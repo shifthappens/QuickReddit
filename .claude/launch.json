@@ -4,7 +4,7 @@
     {
       "name": "quickreddit",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8765"],
+      "runtimeArgs": ["-m", "http.server", "8765", "--directory", "/Users/coen/Sites/quickreddit"],
       "port": 8765
     }
   ]
