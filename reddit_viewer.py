@@ -1,57 +1,35 @@
 #!/usr/bin/env python3
 """
 QuickReddit - daily Reddit subreddit viewer.
-Fetches new posts + top comments and renders an HTML report.
+Uses Reddit's public JSON API — no credentials needed.
 """
 
-import os
-import sys
 import json
 import html
 import datetime
 import argparse
+import time
 import urllib.request
-import urllib.parse
 import urllib.error
-import base64
+import os
+import sys
 
 SUBREDDITS = ["dutchfire", "freelance", "webdev"]
 POSTS_PER_SUB = 25
 TOP_COMMENTS = 5
-USER_AGENT = "QuickReddit/1.0 (daily viewer; contact via github)"
+# Reddit requires a descriptive User-Agent for API requests
+USER_AGENT = "python:QuickReddit:v1.0 (personal daily digest; single user)"
 
 
-def get_access_token(client_id: str, client_secret: str) -> str:
-    credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
-    data = urllib.parse.urlencode({"grant_type": "client_credentials"}).encode()
-    req = urllib.request.Request(
-        "https://www.reddit.com/api/v1/access_token",
-        data=data,
-        headers={
-            "Authorization": f"Basic {credentials}",
-            "User-Agent": USER_AGENT,
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-    )
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())["access_token"]
-
-
-def api_get(path: str, token: str) -> dict:
-    url = f"https://oauth.reddit.com{path}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "User-Agent": USER_AGENT,
-        },
-    )
-    with urllib.request.urlopen(req) as resp:
+def api_get(url: str) -> dict:
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read())
 
 
-def fetch_posts(subreddit: str, token: str, limit: int = POSTS_PER_SUB) -> list[dict]:
-    data = api_get(f"/r/{subreddit}/new?limit={limit}", token)
+def fetch_posts(subreddit: str, limit: int) -> list[dict]:
+    url = f"https://www.reddit.com/r/{subreddit}/new.json?limit={limit}"
+    data = api_get(url)
     posts = []
     for child in data["data"]["children"]:
         p = child["data"]
@@ -61,7 +39,6 @@ def fetch_posts(subreddit: str, token: str, limit: int = POSTS_PER_SUB) -> list[
             "author": p.get("author", "[deleted]"),
             "score": p["score"],
             "url": f"https://www.reddit.com{p['permalink']}",
-            "link": p.get("url", ""),
             "selftext": p.get("selftext", "")[:300],
             "num_comments": p["num_comments"],
             "created_utc": p["created_utc"],
@@ -70,8 +47,9 @@ def fetch_posts(subreddit: str, token: str, limit: int = POSTS_PER_SUB) -> list[
     return posts
 
 
-def fetch_top_comments(post_id: str, subreddit: str, token: str) -> list[dict]:
-    data = api_get(f"/r/{subreddit}/comments/{post_id}?limit=10&sort=top&depth=1", token)
+def fetch_top_comments(post_id: str, subreddit: str) -> list[dict]:
+    url = f"https://www.reddit.com/r/{subreddit}/comments/{post_id}.json?limit=10&sort=top&depth=1"
+    data = api_get(url)
     comments = []
     if len(data) < 2:
         return comments
@@ -89,7 +67,7 @@ def fetch_top_comments(post_id: str, subreddit: str, token: str) -> list[dict]:
     return comments
 
 
-def render_html(subreddit_data: dict[str, list]) -> str:
+def render_html(subreddit_data: dict, posts_per_sub: int) -> str:
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     rows = []
     for subreddit, posts in subreddit_data.items():
@@ -98,6 +76,7 @@ def render_html(subreddit_data: dict[str, list]) -> str:
             rows.append('<p class="empty">Geen posts gevonden.</p>')
         for post in posts:
             created = datetime.datetime.utcfromtimestamp(post["created_utc"]).strftime("%Y-%m-%d %H:%M UTC")
+
             comments_html = ""
             for c in post.get("comments", []):
                 body = html.escape(c["body"]).replace("\n", "<br>")
@@ -112,7 +91,9 @@ def render_html(subreddit_data: dict[str, list]) -> str:
 
             selftext = ""
             if post["selftext"].strip():
-                selftext = f'<p class="selftext">{html.escape(post["selftext"])}{"…" if len(post["selftext"]) == 300 else ""}</p>'
+                excerpt = html.escape(post["selftext"])
+                ellipsis = "…" if len(post["selftext"]) == 300 else ""
+                selftext = f'<p class="selftext">{excerpt}{ellipsis}</p>'
 
             rows.append(f"""
 <article>
@@ -165,7 +146,10 @@ def render_html(subreddit_data: dict[str, list]) -> str:
     h3 a {{ color: #0079d3; text-decoration: none; }}
     h3 a:hover {{ text-decoration: underline; }}
     .meta {{ font-size: 0.8rem; color: #666; margin-bottom: 0.5rem; }}
-    .selftext {{ font-size: 0.88rem; color: #333; margin: 0.5rem 0; border-left: 3px solid #e0e0e0; padding-left: 0.75rem; }}
+    .selftext {{
+      font-size: 0.88rem; color: #333; margin: 0.5rem 0;
+      border-left: 3px solid #e0e0e0; padding-left: 0.75rem;
+    }}
     details {{ margin-top: 0.5rem; }}
     summary {{ cursor: pointer; font-size: 0.85rem; color: #555; user-select: none; }}
     .comments {{ margin-top: 0.5rem; }}
@@ -184,78 +168,52 @@ def render_html(subreddit_data: dict[str, list]) -> str:
 </head>
 <body>
   <h1>QuickReddit</h1>
-  <p style="font-size:0.85rem;color:#666">Gegenereerd op {now} · {POSTS_PER_SUB} nieuwste posts per subreddit</p>
+  <p style="font-size:0.85rem;color:#666">Gegenereerd op {now} · {posts_per_sub} nieuwste posts per subreddit</p>
   {body}
   <footer>QuickReddit – alleen voor persoonlijk gebruik</footer>
 </body>
 </html>"""
 
 
-def load_env():
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
-    if os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, _, val = line.partition("=")
-                    os.environ.setdefault(key.strip(), val.strip())
-
-
 def main():
     parser = argparse.ArgumentParser(description="QuickReddit – dagelijks Reddit overzicht")
     parser.add_argument("--subreddits", nargs="+", default=SUBREDDITS,
-                        help="Subreddits om op te halen (default: dutchfire freelance webdev)")
+                        help="Subreddits (default: dutchfire freelance webdev)")
     parser.add_argument("--posts", type=int, default=POSTS_PER_SUB,
-                        help="Aantal posts per subreddit (default: 25)")
+                        help="Posts per subreddit (default: 25)")
     parser.add_argument("--output", default="reddit_report.html",
                         help="Output HTML bestand (default: reddit_report.html)")
     parser.add_argument("--no-comments", action="store_true",
-                        help="Sla het ophalen van comments over (sneller)")
+                        help="Sla comments over (sneller)")
     args = parser.parse_args()
 
-    load_env()
-    client_id = os.environ.get("REDDIT_CLIENT_ID", "")
-    client_secret = os.environ.get("REDDIT_CLIENT_SECRET", "")
-
-    if not client_id or not client_secret:
-        print("Fout: REDDIT_CLIENT_ID en REDDIT_CLIENT_SECRET moeten ingesteld zijn.", file=sys.stderr)
-        print("Maak een .env bestand aan of exporteer de variabelen in je shell.", file=sys.stderr)
-        sys.exit(1)
-
-    print("Ophalen van toegangstoken...", flush=True)
-    try:
-        token = get_access_token(client_id, client_secret)
-    except urllib.error.HTTPError as e:
-        print(f"Auth mislukt ({e.code}): controleer je client ID en secret.", file=sys.stderr)
-        sys.exit(1)
-
-    subreddit_data: dict[str, list] = {}
+    subreddit_data = {}
     for sub in args.subreddits:
         print(f"  r/{sub} ophalen...", flush=True)
         try:
-            posts = fetch_posts(sub, token, limit=args.posts)
+            posts = fetch_posts(sub, args.posts)
         except urllib.error.HTTPError as e:
-            print(f"  Waarschuwing: r/{sub} overgeslagen ({e.code})", file=sys.stderr)
+            print(f"  Waarschuwing: r/{sub} overgeslagen (HTTP {e.code})", file=sys.stderr)
             subreddit_data[sub] = []
             continue
 
         if not args.no_comments:
             for post in posts:
                 try:
-                    post["comments"] = fetch_top_comments(post["id"], sub, token)
+                    post["comments"] = fetch_top_comments(post["id"], sub)
+                    time.sleep(0.5)  # vriendelijk voor Reddit's servers
                 except urllib.error.HTTPError:
                     post["comments"] = []
+
         subreddit_data[sub] = posts
 
-    output_path = os.path.join(os.path.dirname(__file__) or ".", args.output)
-    html_content = render_html(subreddit_data)
+    output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.output)
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(html_content)
+        f.write(render_html(subreddit_data, args.posts))
 
     total = sum(len(v) for v in subreddit_data.values())
-    print(f"\nKlaar! {total} posts geschreven naar: {output_path}")
-    print(f"Open het bestand in je browser: file://{os.path.abspath(output_path)}")
+    print(f"\nKlaar! {total} posts → {output_path}")
+    print(f"Open in browser: file://{output_path}")
 
 
 if __name__ == "__main__":
