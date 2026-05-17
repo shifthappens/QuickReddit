@@ -32,15 +32,23 @@ python3 reddit_viewer.py [opties]
 Bovenin `reddit_viewer.py`:
 
 ```python
-LLM_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-LLM_MODEL   = "deepseek/deepseek-v4-flash"
+LLM_API_URL  = "https://openrouter.ai/api/v1/chat/completions"
+LLM_MODEL    = "deepseek/deepseek-v4-flash"
 LLM_API_KEY_ENV = "OPENROUTER_API_KEY"
-LLM_ENABLED = True
+LLM_ENABLED  = True
+LLM_WORKERS  = 5      # parallelle requests
 ```
 
 Wisselen van provider: pas `LLM_API_URL`, `LLM_MODEL` en `LLM_API_KEY_ENV` aan. Elke OpenAI-compatibele API werkt.
 
+## Gedrag
+
+- Posts met minder dan 5 comments worden overgeslagen.
+- Streeft naar 30 comments per post; laadt "more"-objecten bij indien nodig.
+- Samenvattingen worden parallel gegenereerd (standaard 5 tegelijk).
+- Bij timeout of fout wordt de samenvatting automatisch één keer herhaald. Bij twee mislukte pogingen blijft de post in de output met de melding `[Samenvatting niet beschikbaar]`.
+
 ## Vereisten
 
-- Python 3.9+ (geen externe packages)
+- Python 3.10+
 - OpenRouter-account met credits (of vervang door andere provider)
