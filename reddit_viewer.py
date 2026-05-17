@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-QuickReddit - fetches top Reddit posts + nested comments and saves to JSON.
-Summaries are generated separately by Claude Code.
+QuickReddit - fetches top Reddit posts + nested comments, generates summaries via LLM, saves to JSON.
 """
 
 import json
 import datetime
 import argparse
 import time
+import os
 import urllib.request
 import urllib.error
 
@@ -16,6 +16,63 @@ POSTS_PER_SUB = 10
 TOP_LEVEL_LIMIT = 50
 
 USER_AGENT = "python:QuickReddit:v1.0 (personal daily digest; single user)"
+
+# --- LLM configuratie (makkelijk te wisselen) ---
+LLM_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+LLM_MODEL = "deepseek/deepseek-v4-flash"  # OpenRouter model ID
+LLM_API_KEY_ENV = "OPENROUTER_API_KEY"
+LLM_ENABLED = True  # zet op False om samenvattingen over te slaan
+
+
+def llm_summarize(post: dict) -> str:
+    api_key = os.environ.get(LLM_API_KEY_ENV, "")
+    if not api_key:
+        print(f"  (samenvatting overgeslagen: {LLM_API_KEY_ENV} niet ingesteld)")
+        return ""
+
+    top_comments = []
+    for c in post.get("comments", [])[:10]:
+        if c.get("body"):
+            top_comments.append(f"- {c['body'][:400]}")
+
+    prompt = (
+        f"Subreddit: r/{post['subreddit']}\n"
+        f"Titel: {post['title']}\n"
+        f"Post: {post.get('selftext', '') or '(geen tekst)'}\n"
+        f"Top comments:\n" + "\n".join(top_comments or ["(geen comments)"])
+        + "\n\nGeef een samenvatting in het Nederlands van maximaal 100 woorden. Beschrijf waar de post over gaat en geef een genuanceerd beeld van de verschillende standpunten uit de reacties, inclusief afwijkende meningen. Eindig altijd met een volledige zin. Geen opsommingstekens."
+    )
+
+    payload = json.dumps({
+        "model": LLM_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 2000,
+    }).encode()
+
+    req = urllib.request.Request(
+        LLM_API_URL,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "HTTP-Referer": "https://github.com/coen/quickreddit",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+            content = data["choices"][0]["message"].get("content") or data["choices"][0].get("text", "")
+            if not content:
+                print(f"  (leeg antwoord van model: {json.dumps(data)[:200]})")
+                return ""
+            return content.strip()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:300]
+        print(f"  (samenvatting mislukt: HTTP {e.code} — {body})")
+        return ""
+    except Exception as e:
+        print(f"  (samenvatting mislukt: {e})")
+        return ""
 
 
 def api_get(url: str) -> dict:
@@ -92,11 +149,14 @@ def fetch_comments(post_id: str, subreddit: str) -> list[dict]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="QuickReddit — fetch only")
+    parser = argparse.ArgumentParser(description="QuickReddit — fetch + summarize")
     parser.add_argument("--subreddits", nargs="+", default=SUBREDDITS)
     parser.add_argument("--posts", type=int, default=POSTS_PER_SUB)
     parser.add_argument("--output", default="reddit_data.json")
+    parser.add_argument("--no-summaries", action="store_true", help="Sla LLM-samenvattingen over")
     args = parser.parse_args()
+
+    summarize = LLM_ENABLED and not args.no_summaries
 
     result = {
         "fetched_at": datetime.datetime.utcnow().isoformat(),
@@ -122,16 +182,17 @@ def main():
             except urllib.error.HTTPError:
                 post["comments"] = []
 
+            if summarize:
+                post["summary"] = llm_summarize(post)
+
         result["subreddits"][sub] = posts
 
-    import os
     output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.output)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
     total = sum(len(v) for v in result["subreddits"].values())
     print(f"\nKlaar! {total} posts → {output_path}")
-    print("Vraag Claude Code nu om samenvattingen te genereren.")
 
 
 if __name__ == "__main__":

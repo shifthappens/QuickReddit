@@ -1,15 +1,15 @@
 # QuickReddit
 
-Dagelijks Reddit-digest: posts ophalen met Python, samenvattingen genereren via Claude Code, resultaat bekijken als HTML.
+Dagelijks Reddit-digest: posts ophalen, samenvattingen genereren via LLM, resultaat bekijken als HTML.
 
 ## Workflow
 
 ```bash
-# 1. Data ophalen
-python3 reddit_viewer.py
+# 1. API key instellen (eenmalig)
+export OPENROUTER_API_KEY=sk-or-...
 
-# 2. Vraag Claude Code om samenvattingen te genereren
-# "lees reddit_data.json, schrijf een Nederlandse samenvatting per post en sla op"
+# 2. Data ophalen + samenvattingen genereren
+python3 reddit_viewer.py
 
 # 3. Open in browser (vereist een lokale server vanwege fetch())
 python3 -m http.server 8765
@@ -21,22 +21,26 @@ python3 -m http.server 8765
 ```
 python3 reddit_viewer.py [opties]
 
-  --subreddits r/a r/b ...   Subreddits (default: dutchfire freelance webdev)
+  --subreddits r/a r/b ...   Subreddits (default: zie SUBREDDITS in script)
   --posts N                  Posts per subreddit (default: 10)
   --output bestand.json      Uitvoerbestand (default: reddit_data.json)
+  --no-summaries             Sla LLM-samenvattingen over
 ```
 
-## Hoe het werkt
+## LLM-configuratie
 
-1. `reddit_viewer.py` haalt posts + comments op via Reddit's publieke JSON API en slaat op als `reddit_data.json`.
-2. Claude Code leest de JSON en schrijft per post een gebalanceerde samenvatting terug naar `summary`-veld.
-3. `reddit_report.html` laadt de JSON en toont titel, meta en samenvatting per post.
+Bovenin `reddit_viewer.py`:
 
-## Automatisering via Claude Cowork
+```python
+LLM_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+LLM_MODEL   = "deepseek/deepseek-v4-flash"
+LLM_API_KEY_ENV = "OPENROUTER_API_KEY"
+LLM_ENABLED = True
+```
 
-Periodieke taak: draai `python3 reddit_viewer.py`, lees daarna `reddit_data.json`, genereer voor elke post een Nederlandse samenvatting en schrijf die terug naar de `summary`-velden.
+Wisselen van provider: pas `LLM_API_URL`, `LLM_MODEL` en `LLM_API_KEY_ENV` aan. Elke OpenAI-compatibele API werkt.
 
 ## Vereisten
 
 - Python 3.9+ (geen externe packages)
-- Internetverbinding
+- OpenRouter-account met credits (of vervang door andere provider)
