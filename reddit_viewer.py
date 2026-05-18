@@ -13,6 +13,16 @@ import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Load .env if present (no external dependencies)
+_env_path = os.path.join(os.path.dirname(__file__), ".env")
+if os.path.exists(_env_path):
+    with open(_env_path) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
+
 SUBREDDITS = ["dutchfire", "werkzaken", "askreddit", "komoot", "todayilearned", "youshouldknow", "zuinig"]
 POSTS_PER_SUB = 10
 TARGET_COMMENTS = 30
