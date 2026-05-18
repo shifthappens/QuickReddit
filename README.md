@@ -2,7 +2,19 @@
 
 Dagelijks Reddit-digest: posts ophalen, samenvattingen genereren via LLM, resultaat bekijken als HTML.
 
-## Workflow
+## Productie
+
+De digest draait automatisch via GitHub Actions:
+
+- **06:00 UTC dagelijks** — `fetch.yml` haalt data op via een GitHub runner (Reddit blokkeert datacenter-IPs, GitHub runners niet), commit `reddit_data.json` naar main.
+- **Bij elke push naar main** — `deploy.yml` SSHt naar de server en doet `git reset --hard origin/main`.
+- **Server** (`142.93.135.135`, pad `/var/www/html/domains/coen.at/public_html/quickreddit`) — serveert alleen statische bestanden, raakt Reddit nooit direct aan.
+
+Handmatig triggeren: GitHub → Actions → Fetch → Run workflow.
+
+GitHub Actions secrets die vereist zijn: `OPENROUTER_API_KEY`, `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_KEY`.
+
+## Lokaal draaien
 
 ```bash
 # 1. API key instellen (eenmalig)
